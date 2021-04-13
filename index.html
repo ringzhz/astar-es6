@@ -1,0 +1,537 @@
+<!doctype html>
+
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+
+    <title>A*</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* just to be sure these are full screen*/
+
+        .wrapper {
+            height: 95vh;
+            width: 95vw;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .message-wrapper {
+            height: 90px;
+            margin-top: 5px;
+        }
+        .message-wrapper button {
+            /* float: right; */
+        }
+
+        .canvas-wrapper {
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrapper">
+        <div class="message-wrapper">
+            <label for="drawDuration">Draw Duration(ms): </label>
+            <input id="drawDuration" type="number" min="60" max="30000" value="2000" step="1000" />
+            <div id="message"></div>
+            <button id="redrawButton">Redraw</button>
+            <button id="resetButton">Reset</button>
+        </div>
+        <div class="canvas-wrapper">
+            <canvas id="canvas" />
+        </div>
+    </div>
+    <script>
+
+//BinaryHeap implementation from: https://eloquentjavascript.net/1st_edition/appendix2.html
+        function BinaryHeap(scoreFunction) {
+            this.content = [];
+            this.elems = new Set();
+            this.scoreFunction = scoreFunction;
+        }
+
+        BinaryHeap.prototype = {
+        push: function(element) {
+            if (this.elems.has(element)) {
+                return;
+            }
+            this.elems.add(element);
+            // Add the new element to the end of the array.
+            this.content.push(element);
+            // Allow it to bubble up.
+            this.bubbleUp(this.content.length - 1);
+        },
+
+        pop: function() {
+            // Store the first element so we can return it later.
+            var result = this.content[0];
+            // Get the element at the end of the array.
+            var end = this.content.pop();
+            // If there are any elements left, put the end element at the
+            // start, and let it sink down.
+            if (this.content.length > 0) {
+            this.content[0] = end;
+            this.sinkDown(0);
+            }
+            
+            this.elems.delete(result);
+            return result;
+        },
+
+        remove: function(node) {
+            var length = this.content.length;
+            this.elems.delete(node);
+            // To remove a value, we must search through the array to find
+            // it.
+            for (var i = 0; i < length; i++) {
+            if (this.content[i] != node) continue;
+            // When it is found, the process seen in 'pop' is repeated
+            // to fill up the hole.
+            var end = this.content.pop();
+            // If the element we popped was the one we needed to remove,
+            // we're done.
+            if (i == length - 1) break;
+            // Otherwise, we replace the removed element with the popped
+            // one, and allow it to float up or sink down as appropriate.
+            this.content[i] = end;
+            this.bubbleUp(i);
+            this.sinkDown(i);
+            break;
+            }
+        },
+
+        size: function() {
+            return this.content.length;
+        },
+
+        bubbleUp: function(n) {
+            // Fetch the element that has to be moved.
+            var element = this.content[n], score = this.scoreFunction(element);
+            // When at 0, an element can not go up any further.
+            while (n > 0) {
+            // Compute the parent element's index, and fetch it.
+            var parentN = Math.floor((n + 1) / 2) - 1,
+            parent = this.content[parentN];
+            // If the parent has a lesser score, things are in order and we
+            // are done.
+            if (score >= this.scoreFunction(parent))
+                break;
+
+            // Otherwise, swap the parent with the current element and
+            // continue.
+            this.content[parentN] = element;
+            this.content[n] = parent;
+            n = parentN;
+            }
+        },
+
+        sinkDown: function(n) {
+            // Look up the target element and its score.
+            var length = this.content.length,
+            element = this.content[n],
+            elemScore = this.scoreFunction(element);
+
+            while(true) {
+            // Compute the indices of the child elements.
+            var child2N = (n + 1) * 2, child1N = child2N - 1;
+            // This is used to store the new position of the element,
+            // if any.
+            var swap = null;
+            // If the first child exists (is inside the array)...
+            if (child1N < length) {
+                // Look it up and compute its score.
+                var child1 = this.content[child1N],
+                child1Score = this.scoreFunction(child1);
+                // If the score is less than our element's, we need to swap.
+                if (child1Score < elemScore)
+                swap = child1N;
+            }
+            // Do the same checks for the other child.
+            if (child2N < length) {
+                var child2 = this.content[child2N],
+                child2Score = this.scoreFunction(child2);
+                if (child2Score < (swap == null ? elemScore : child1Score))
+                swap = child2N;
+            }
+
+            // No need to swap further, we are done.
+            if (swap == null) break;
+
+            // Otherwise, swap and continue.
+            this.content[n] = this.content[swap];
+            this.content[swap] = element;
+            n = swap;
+            }
+        }
+        };
+
+
+        const canvas = document.getElementById('canvas');
+        const message = document.getElementById('message');
+        const resetButton = document.getElementById('resetButton');
+        const redrawButton = document.getElementById('redrawButton');
+
+        // TODO fill screen
+        const canvasWidth = 500;
+        const canvasHeight = 800;
+        canvas.style.border = "1px solid";
+        canvas.style.position = "relative";
+        canvas.style.zIndex = 1;
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        const context = canvas.getContext('2d');
+
+        const BOARD_WIDTH = 250;
+        const BOARD_HEIGHT = 400;
+
+        const NodeState = Object.freeze({
+            CLEAR:   { fillStyle: 'white' },
+            START:   { fillStyle: 'green' },
+            END:   { fillStyle: 'red' },
+            WALL:   { fillStyle: 'grey' },
+            EXPLORED:   { fillStyle: 'white' },
+            PATH:   { fillStyle: 'blue' },
+        });
+        
+        const nodeWidth = Math.floor(canvasWidth / BOARD_WIDTH);
+        const nodeHeight = Math.floor(canvasHeight / BOARD_HEIGHT);
+        
+
+        function clearNode(node) {
+            node.state = NodeState.CLEAR;
+            node.fillStyle = null;
+            node.travelCost = Infinity;
+            node.estimatedDistanceToFinish = null;
+            node.score = Infinity;
+            node.previousNode = null;
+
+            //todo remove
+            node.visited = 0;
+            return node;
+        }
+
+        const nodes = [];
+        window.board = nodes;
+        for(let x = 0; x < BOARD_WIDTH; x++) {
+            nodes[x] = [];
+            for(let y = 0; y < BOARD_HEIGHT; y++) {
+                const node = {};
+                node.left = x*nodeWidth;
+                node.top = y*nodeHeight;
+                node.x = x;
+                node.y = y;
+                node.draw = () => draw(x, y);
+                nodes[x][y] = clearNode(node);
+            }
+        }
+
+        function nodeAt(x, y) {
+            return (nodes[x] && nodes[x][y]) || null;
+        }
+
+        function applyToNodeAt(x, y, f) {
+            const node = nodeAt(x, y);
+            if (node) {
+                f(node);
+            }
+        }
+
+        let startNode;
+        let endNode;
+        let lowestScore = null;
+        let highestScore = null;
+
+        function resetExplored() {
+            for(let x = 0; x < BOARD_WIDTH; x++) {
+                for(let y = 0; y < BOARD_HEIGHT; y++) {
+                    const node = nodes[x][y];
+                    if (node.state === NodeState.EXPLORED || node.state === NodeState.PATH) {
+                        // clear the path and explored nodes.
+                        clearNode(node);
+                    } else if (!!node.travelCost) {
+                        // any other explored nodes (the END, and WALLs) get reset, but retain their state
+                        const s = node.state;
+                        clearNode(node);
+                        node.state = s;
+                    }
+                }
+            }
+        }
+
+        function reset() {
+            startNode = null;
+            endNode = null;
+            for(let x = 0; x < BOARD_WIDTH; x++) {
+                for(let y = 0; y < BOARD_HEIGHT; y++) {
+                    clearNode(nodes[x][y]);
+                }
+            }
+            message.innerHTML = 'Click to select a starting point.';
+            drawAll();
+        }
+        reset();
+        resetButton.onclick = () => reset();
+        
+        function getBoardCoords(event) {
+            const canvasCoord = {
+                x: Math.max(event.pageX - canvas.offsetLeft, 0),
+                y: Math.max(event.pageY - canvas.offsetTop, 0)
+            };
+            const x = Math.min(Math.floor(canvasCoord.x / nodeWidth), BOARD_WIDTH - 1);
+            const y = Math.min(Math.floor(canvasCoord.y / nodeHeight), BOARD_HEIGHT - 1);
+
+            return {x, y};
+        }
+
+        function drawAll() {
+            for(let x = 0; x < BOARD_WIDTH; x++) {
+                for(let y = 0; y < BOARD_HEIGHT; y++) {
+                    draw(x, y);
+                }
+            }
+        }
+        function draw(x, y) {
+            const node = nodes[x][y];
+            context.fillStyle = node.state.fillStyle;
+            if (node.fillStyle && node.state !== NodeState.WALL) {
+                context.fillStyle = node.fillStyle;
+            }
+            context.fillRect(node.left, node.top, nodeWidth, nodeHeight);
+        }
+
+        function getEstimatedDistanceToFinish(node) {
+            return Math.sqrt(
+                Math.pow(endNode.x - node.x, 2) + 
+                Math.pow(endNode.y - node.y, 2)
+                );
+        }
+
+        function score(node) {
+            return node.score;
+        }
+
+        function getNeighbors(node) {;
+            const {x, y} = node;
+            const neighbors = [];
+            applyToNodeAt(x + 1, y, n => neighbors.push(n));
+            applyToNodeAt(x - 1, y, n => neighbors.push(n));
+            applyToNodeAt(x, y + 1, n => neighbors.push(n));
+            applyToNodeAt(x, y - 1, n => neighbors.push(n));
+            return neighbors;
+        }
+
+
+        const renderFrames = new Set();
+        function findPath() {
+            if (!startNode || !endNode) {
+                return;
+            }
+            resetExplored();
+            drawAll();
+            renderFrames.forEach(f => {
+                window.clearTimeout(f);
+                renderFrames.delete(f);
+            });
+            const openList = new BinaryHeap(score);
+            const visitedSet = new Set();
+            const visitedList = [];
+            startNode.travelCost = 0;
+            startNode.estDistToFinish = getEstimatedDistanceToFinish(startNode);
+            startNode.score = startNode.estDistToFinish;
+            lowestScore = startNode.score;
+            highestScore = startNode.score;
+
+            openList.push(startNode);
+
+            while(openList.size() > 0) {
+                const current = openList.pop();
+                const {x, y, score, state } = current;
+                visitedSet.add(current);
+                visitedList.push(current);
+                if (current == endNode) {
+                    // Draw the path, exclude Start and End nodes.
+                    for (let path = current.previousNode; path && path.previousNode; path = path.previousNode) {
+                        path.state = NodeState.PATH;
+                    }
+
+                    found = current;
+                    console.log('found', current);
+
+                    const DRAW_DURATION = document.getElementById('drawDuration').value;
+                    const DRAW_FRAMES = DRAW_DURATION / 15;
+                    const frames = [];
+
+                    visitedList.forEach((n, i) => {
+                        const batchIdx = Math.floor(i * DRAW_FRAMES / visitedList.length );
+                        if (!frames[batchIdx]) {
+                            frames[batchIdx] = [];
+                        }
+                        frames[batchIdx].push(n);
+                        
+                        const l = 25 + Math.floor(70 * (n.score - lowestScore) / (highestScore - lowestScore)); 
+                        // if (n.state !== NodeState.PATH) {
+                        //     n.fillStyle = `hsl(65, 100%, ${l}%)`;
+                        // }
+                    });
+
+                    let maxVisited = 0;
+                    frames.forEach((f, i) => {
+                        renderFrames.add(
+                            window.setTimeout(() => {
+                                f.forEach(n => {
+                                    // luminosity is from 25 - 95, scaled on score
+                                    const l = 25 + Math.floor(70 * (n.score - lowestScore) / (highestScore - lowestScore)); 
+                                    if (n.state !== NodeState.PATH) {
+                                        n.fillStyle = `hsl(65, 100%, ${l}%)`;
+                                    }
+                                    if (n.visited) {
+                                        if (n.visited > maxVisited) {
+                                            maxVisited = n.visited;
+                                            console.log('newmax', maxVisited);
+                                        }
+                                    }
+                                    n.visited = (n.visited || 0) + 1;
+                                    n.draw();
+                                });
+                            }, i / DRAW_FRAMES * DRAW_DURATION)
+                        );
+                    });
+
+                    
+                    window.setTimeout(() => {
+                        for (let path = current.previousNode; path && path.previousNode; path = path.previousNode) {
+                            path.fillStyle = null;
+                            path.draw();
+                        }
+                    }, DRAW_DURATION);
+
+                    return;
+                }
+                
+                getNeighbors(current).forEach(n => {
+                    if (n.state === NodeState.WALL) {
+                        return;
+                    }
+
+                    if (n.state !== NodeState.START && n.state !== NodeState.END) {
+                        n.state = NodeState.EXPLORED;
+                    }
+                    
+                    const travelCost = current.travelCost + 1;
+                    if (travelCost < n.travelCost) {
+                        n.previousNode = current;
+                        n.travelCost = travelCost;
+                        if (!n.estimatedDistanceToFinish) {
+                            n.estimatedDistanceToFinish = getEstimatedDistanceToFinish(n);
+                        }
+                        n.score = travelCost + 2 * n.estimatedDistanceToFinish;
+                        if (n.score < lowestScore) {
+                            lowestScore = n.score;
+                        }
+                        if (n.score > highestScore) {
+                            highestScore = n.score;
+                        }
+                        openList.push(n);    
+                    }  
+                });
+
+
+            }
+        }
+
+        redrawButton.onclick = findPath;
+
+        function click(event) {
+            const {x, y} = getBoardCoords(event);
+            const node = nodes[x][y];
+            if (!startNode) {
+                message.innerHTML = 'Click to select a ending point.';
+                startNode = node;
+                startNode.state = NodeState.START;
+            }
+            else if (!endNode) {
+                message.innerHTML = 'Drag to draw walls.';
+                endNode = node;
+                endNode.state = NodeState.END;
+                findPath();
+            }
+        }
+
+        function clear() {
+            context.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        let mouseDown = false, drag = false;
+        let dragStart;
+        let dragEnd;
+        drawAll();
+        canvas.addEventListener('mousedown', function (event) {
+            dragStart = {
+                x: event.pageX - canvas.offsetLeft,
+                y: event.pageY - canvas.offsetTop
+            }
+            mouseDown = true;
+        })
+
+        let lastBoardCoords = {x: null, y: null};
+        
+        canvas.addEventListener('mouseleave', function (event) {
+            if (drag) {
+                findPath();
+                clear();
+                drawAll();
+            }            
+            mouseDown = false;
+            drag = false;
+        });
+
+        canvas.addEventListener('mousemove', function (event) {
+            if (mouseDown) {
+                const boardCoords = getBoardCoords(event);
+                if (lastBoardCoords.x == boardCoords.x && lastBoardCoords.y == boardCoords.y) {
+                    return;
+                }
+                lastBoardCoords = boardCoords;
+                drag = true;
+
+                const {x, y} = boardCoords;
+                const wallAndDraw = n => {
+                    n.state = NodeState.WALL
+                    n.draw();
+                };
+                applyToNodeAt(x, y, wallAndDraw);
+                applyToNodeAt(x+1, y, wallAndDraw);
+                applyToNodeAt(x, y+1, wallAndDraw);
+                applyToNodeAt(x+1, y+1, wallAndDraw);
+            }
+        });
+
+        canvas.addEventListener('mouseup', function (event) {
+            if (!drag) {
+                click(event);
+            } else {
+                findPath();
+            }
+            drag = false;
+            mouseDown = false;
+            clear();
+            drawAll();
+        });
+    </script>
+</body>
+
+</html>
